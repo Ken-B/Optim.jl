@@ -61,7 +61,8 @@ function minfinder{T <: FloatingPoint}(func::Function, l::Array{T,1}, u::Array{T
     local_tol = (polish ? sqrt(eps(T)^(2/3)) : eps(T)^(2/3)),
     polish_tol = eps(T)^(2/3),
     distmin = sqrt(local_tol),
-    distpolish = sqrt(polish_tol))
+    distpolish = sqrt(polish_tol),
+    slavefunc!::Union(Nothing,Function) = nothing)
 
     # When using polish, stopping tolerances are set quite high by default 
     # (sqrt of usual tol). At the end the minima are polished off. Inspiration 
@@ -117,10 +118,30 @@ function minfinder{T <: FloatingPoint}(func::Function, l::Array{T,1}, u::Array{T
     # Compare this value with `stoplevel` at the latest iteration when a minima 
     # was found. 
     doublebox(n::Int) = var([StatsBase.rand_binom(i, .5)/i for i=1:n])
+    
+    #doublebox(n::Int) = var([(i/2+sqrt(i/4)*randn())/i for i=1:n])
+    # function doublebox(n::Int)
+    #     x= var([(i/2+sqrt(i/4)*randn())/i for i=1:n])
+    #     #@printf "calc db: %4f vs %4f" x stoplevel
+    #     return x
+    # end
+    
+    # function doublebox2(n::Int) 
+    #     avg=zero(T)
+    #     m2=zero(T)
+    #     x=zero(T)
+    #     for i = 1:n
+    #         x = ( i/2. + sqrt(i/4.)*randn() ) / i
+    #         delta = x - avg
+    #         avg += delta / i
+    #         m2 += delta * (x - avg)
+    #     end
+    #     return m2 / (n - 1)
+    # end
 
     dim = length(l) #precalc dimension of problem
     function checkrule{T}(a::SearchPoint{T}, b::SearchPoint{T}, dist)
-        #L2dist(a.x, b.x) < dist && dot(a.x - b.x, a.g - b.g) > 0
+        #norm(a.x - b.x,2) < dist && dot(a.x - b.x, a.g - b.g) > 0
         ax = a.x
         bx = b.x
         ag = a.g
@@ -150,6 +171,7 @@ function minfinder{T <: FloatingPoint}(func::Function, l::Array{T,1}, u::Array{T
         points = Array(SearchPoint{T}, 0) #empty points
         for unused=1:N
             fx = l + rand(dim) .* (u - l)
+            slavefunc! === nothing || slavefunc!(fx)
             fval::T = func(fg, fx)
             fcount += 1
             p = SearchPoint(fx, copy(fg), fval)
@@ -191,20 +213,20 @@ function minfinder{T <: FloatingPoint}(func::Function, l::Array{T,1}, u::Array{T
             fx, fvals, fmincount, converged = fminbox(func, p.x, l, u, fminops)
             fcount += fmincount
             searches += 1
-            fval = minimum([minimum(fvals[i]) for i in 1:length(fvals)])
-
+            
             if converged
                 converges +=1
-            
+                fval = minimum([minimum(fvals[i]) for i in 1:length(fvals)])
+
                 # Update typical search distance 
                 typical_distance = (typical_distance*(searches - 1) + 
-                    L2dist(p.x, fx)) / searches
+                    norm(p.x - fx,2)) / searches
                 #@printf "new typ distance: %s \n" typical_distance
                 
                 # Check if minima already found, if not, add to minimalists
                 minfound = false
                 for m in minima
-                    if L2dist(fx, m.x) < distmin
+                    if norm(fx - m.x,2) < distmin
                         minfound = true
                         continue
                     end
@@ -215,9 +237,9 @@ function minfinder{T <: FloatingPoint}(func::Function, l::Array{T,1}, u::Array{T
                     stoplevel = EXHAUSTIVE * doublebox(N) 
             
                     # Update typical minima distance
-                    if isempty(minima); min_distance = L2dist(fx, p.x); end
+                    if isempty(minima); min_distance = norm(fx - p.x,2); end
                     for m in minima
-                       min_distance = min(min_distance, L2dist(fx, m.x))
+                       min_distance = min(min_distance, norm(fx - m.x,2))
                     end
 
                     # Gradient not given as output fminbox, needs extra function
@@ -247,7 +269,7 @@ function minfinder{T <: FloatingPoint}(func::Function, l::Array{T,1}, u::Array{T
             # Check if not converges to another final optimization minima
             minfound = false
             for h in polishminina
-                if L2dist(fx, h.x) < distpolish
+                if norm(fx - h.x,2) < distpolish
                     minfound = true
                     continue
                 end
